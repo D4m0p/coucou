@@ -34,8 +34,8 @@ const CLAUDE_DESKTOP_ID = "agent_claude-desktop";
 const BOT_SIDE = 24;
 /** Same margin as the Rust hit test (src-tauri/src/island.rs). */
 const HIT_MARGIN = 14;
-/** Frame pacing while only the working dots move: enough for the pulse to read as one. */
-const PULSE_FRAME_MS = 1000 / 15;
+/** Frame pacing while only the working dots move, as the desktop Mochi does awake. */
+const PULSE_FRAME_MS = 1000 / 30;
 
 /** The three views the drop sequence owns; leaving them stops the engine. */
 const UPLOAD_VIEWS: ReadonlySet<IslandViewName> = new Set(["upload", "uploading", "choose"]);
@@ -1035,10 +1035,14 @@ export class Island {
       !UploadSeq.isActive && !viewAnimating
     ) {
       // Only the working dots are moving. A pulse that small does not need the
-      // display's own rate — eight times this on a 120 Hz panel — and no sound
+      // display's own rate — four times this on a 120 Hz panel — and no sound
       // goes with it, so the audio thread can rest as it does when the loop stops.
       Sound.idle();
-      window.setTimeout(() => requestAnimationFrame(this.frame), PULSE_FRAME_MS);
+      // requestAnimationFrame then waits for the display's next refresh: the
+      // timer stops a few milliseconds short, so the frame lands on the pace
+      // asked for rather than one refresh late.
+      const wait = Math.max(0, PULSE_FRAME_MS - (performance.now() - nowMs) - 4);
+      window.setTimeout(() => requestAnimationFrame(this.frame), wait);
     } else {
       requestAnimationFrame(this.frame);
     }
