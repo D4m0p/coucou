@@ -93,6 +93,7 @@ fn xdg_user_dir(text: &str, key: &str, home: &Path) -> Option<PathBuf> {
 /// plugin paths that vanish once Coucou quits. Give ours its own file.
 pub fn prepare_environment() {
     prefer_x11_on_gnome();
+    lighter_renderer_through_xwayland();
     follow_gnome_text_scaling();
     if std::env::var_os("APPIMAGE").is_none() || std::env::var_os("GST_REGISTRY").is_some() {
         return;
@@ -118,6 +119,26 @@ fn prefer_x11_on_gnome() {
     ) {
         std::env::set_var("GDK_BACKEND", "x11");
     }
+}
+
+/// Through XWayland, WebKit's DMA-BUF renderer hands every frame of the island's
+/// window to GTK the expensive way: on a 3840x2400 panel at 120 Hz the same
+/// animation used more than twice the CPU with it (72 % of a core against 31 %).
+/// The shared-memory path draws the same thing. Only when Coucou itself chose
+/// X11 on GNOME, and an explicit WEBKIT_DISABLE_DMABUF_RENDERER always wins.
+fn lighter_renderer_through_xwayland() {
+    let env = |k: &str| std::env::var(k).unwrap_or_default();
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_some()
+        || !should_prefer_x11(
+            &env("XDG_SESSION_TYPE"),
+            &env("XDG_CURRENT_DESKTOP"),
+            &env("COUCOU_X11"),
+            &env("DISPLAY"),
+        )
+    {
+        return;
+    }
+    std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
 }
 
 /// Only with XWayland actually there (`DISPLAY` set): forcing x11 without it
@@ -389,7 +410,10 @@ pub fn make_non_activating(win: &WebviewWindow) {
             // On X11 a Dock is kept above everything and is the only kind of
             // window, besides the desktop, that "show desktop" leaves alone.
             // COUCOU_DOCK=0 falls back to a utility window.
-            let dock = std::env::var("COUCOU_DOCK").map(|v| v != "0").unwrap_or(true);
+            // This laptop: under GNOME's top bar rather than over its clock,
+            // unless COUCOU_DOCK=1 asks for the dock back.
+            let gnome = is_gnome(&std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default());
+            let dock = std::env::var("COUCOU_DOCK").map(|v| v != "0").unwrap_or(!gnome);
             gw.set_type_hint(if dock {
                 gtk::gdk::WindowTypeHint::Dock
             } else {

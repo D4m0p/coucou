@@ -169,7 +169,10 @@ class DesktopMochi {
 
   private schedule() {
     if (this.timer != null || !this.visible) return;
-    const wait = this.asleep ? ASLEEP_FRAME_MS : AWAKE_FRAME_MS;
+    // Awake, requestAnimationFrame then waits for the display's next refresh:
+    // the timer stops a few milliseconds short so the frame lands on the pace
+    // asked for rather than one refresh late.
+    const wait = this.asleep ? ASLEEP_FRAME_MS : AWAKE_FRAME_MS - 4;
     const due = Math.max(0, this.lastDraw + wait - performance.now());
     this.timer = window.setTimeout(() => {
       // Awake, frames line up with the display; asleep, a timer is enough.
