@@ -8,7 +8,8 @@
 #   ./scripts/update-linux.sh --check          only say whether there is an update
 #   ./scripts/update-linux.sh --force          rebuild and reinstall even if nothing moved
 #   ./scripts/update-linux.sh --push           also push the rebased branch to its remote
-#   ./scripts/update-linux.sh --install-timer  check once a day (systemd user timer)
+#   ./scripts/update-linux.sh --install-timer  check once a day (systemd user timer);
+#                                              with --push, the timer pushes too
 #   ./scripts/update-linux.sh --remove-timer
 #
 # Nothing is touched when the working tree is dirty or the rebase conflicts. The
@@ -62,7 +63,7 @@ Description=Update Coucou from source
 
 [Service]
 Type=oneshot
-ExecStart=$REPO_ROOT/scripts/update-linux.sh
+ExecStart=$REPO_ROOT/scripts/update-linux.sh$([ "$PUSH" -eq 1 ] && echo ' --push')
 Environment=COUCOU_PREFIX=$(prefix)
 Environment=COUCOU_UPSTREAM=$UPSTREAM
 Nice=10
@@ -81,7 +82,7 @@ WantedBy=timers.target
 EOF
   systemctl --user daemon-reload
   systemctl --user enable --now "$UNIT.timer"
-  echo "Coucou checks for updates once a day. Its output: journalctl --user -u $UNIT"
+  echo "Coucou checks for updates once a day$([ "$PUSH" -eq 1 ] && echo ', and pushes the rebased branch'). Its output: journalctl --user -u $UNIT"
 }
 
 remove_timer() {
@@ -91,24 +92,46 @@ remove_timer() {
   echo "Coucou no longer checks for updates."
 }
 
-CHECK=0 FORCE=0 PUSH=0
+CHECK=0 FORCE=0 PUSH=0 TIMER=""
 for arg in "$@"; do
   case "$arg" in
     --check) CHECK=1 ;;
     --force) FORCE=1 ;;
     --push) PUSH=1 ;;
-    --install-timer) install_timer; exit 0 ;;
-    --remove-timer) remove_timer; exit 0 ;;
-    -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --install-timer) TIMER=install ;;
+    --remove-timer) TIMER=remove ;;
+    -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option '$arg' (see --help)" ;;
   esac
 done
+case "$TIMER" in
+  install) install_timer; exit 0 ;;
+  remove) remove_timer; exit 0 ;;
+esac
 
 PREFIX="$(prefix)"
 STAMP="$PREFIX/.coucou-commit"
 cd "$REPO_ROOT"
 
 BRANCH=$(git symbolic-ref --quiet --short HEAD) || die "the checkout is on no branch"
+
+# A rebase leaves the branch's own remote (a fork) behind. The mark outlives a
+# push that failed, or a run without --push, so a later run catches up; commits
+# made by hand since are not what it is for, and nothing is pushed without it.
+PENDING="$(git rev-parse --git-dir)/coucou-push-pending"
+push_branch() {
+  [ "$PUSH" -eq 1 ] && [ -f "$PENDING" ] || return 0
+  local to
+  to=$(git config "branch.$BRANCH.remote" || true)
+  if [ -z "$to" ] || [ "$to" = "$REMOTE" ]; then
+    echo "warning: $BRANCH tracks no remote of its own; not pushed" >&2
+  elif git push --quiet --force-with-lease "$to" "$BRANCH"; then
+    rm -f "$PENDING"
+    echo "Pushed $BRANCH to $to."
+  else
+    say "Coucou could not push $BRANCH to $to; the next update tries again."
+  fi
+}
 
 # ── 1. What upstream has ──────────────────────────────────────────────────────
 # The refspec is spelled out: a clone narrowed to one tag would otherwise fetch
@@ -121,6 +144,7 @@ INSTALLED=$(cat "$STAMP" 2>/dev/null || true)
 
 if [ "$BEHIND" -eq 0 ] && [ "$INSTALLED" = "$(git rev-parse HEAD)" ] && [ "$FORCE" -eq 0 ]; then
   echo "Coucou is up to date ($(git rev-parse --short HEAD))."
+  push_branch
   exit 0
 fi
 
@@ -147,6 +171,7 @@ if [ "$BEHIND" -gt 0 ]; then
     git branch -D "$BACKUP" >/dev/null
     exit 1
   fi
+  touch "$PENDING"
   echo "Rebased $BRANCH onto $UPSTREAM ($BEHIND new commits). Previous state: $BACKUP"
 fi
 
@@ -188,14 +213,7 @@ trap - EXIT
 
 VERSION=$(node -p "require('./package.json').version")
 
-if [ "$PUSH" -eq 1 ] && [ "$BEHIND" -gt 0 ]; then
-  PUSH_REMOTE=$(git config "branch.$BRANCH.remote" || true)
-  if [ -n "$PUSH_REMOTE" ] && [ "$PUSH_REMOTE" != "$REMOTE" ]; then
-    git push --quiet --force-with-lease "$PUSH_REMOTE" "$BRANCH" || echo "warning: could not push $BRANCH to $PUSH_REMOTE" >&2
-  else
-    echo "warning: $BRANCH tracks no remote of its own; not pushed" >&2
-  fi
-fi
+push_branch
 
 # ── 5. Restart ────────────────────────────────────────────────────────────────
 # In its own systemd scope when there is one, so that Coucou outlives the timer's
