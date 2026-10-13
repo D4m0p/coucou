@@ -118,7 +118,7 @@ BRANCH=$(git symbolic-ref --quiet --short HEAD) || die "the checkout is on no br
 # A rebase leaves the branch's own remote (a fork) behind. The mark outlives a
 # push that failed, or a run without --push, so a later run catches up; commits
 # made by hand since are not what it is for, and nothing is pushed without it.
-PENDING="$(git rev-parse --git-dir)/coucou-push-pending"
+PENDING="$(git rev-parse --absolute-git-dir)/coucou-push-pending"
 push_branch() {
   [ "$PUSH" -eq 1 ] && [ -f "$PENDING" ] || return 0
   local to
